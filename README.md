@@ -15,8 +15,10 @@ Sem argumentos, o programa pergunta o intervalo entre chegadas e a quantidade de
 
 ```sh
 ./executar_experimentos.sh ./barbeiro_dorminhoco resultados_experimentos.csv
-python3 gerar_graficos.py resultados_experimentos.csv
+~/.venvs/matplotlib/bin/python gerar_graficos.py resultados_experimentos.csv
 ```
+
+Neste ambiente, Python 3.13 e matplotlib estão instalados no ambiente local `~/.venvs/matplotlib` (sem alterar os pacotes do sistema).
 
 O script executa cinco repetições para cada uma das cinco configurações distintas, gerando um CSV e quatro PNGs. O desvio padrão entre repetições é mostrado como barra de erro.
 
