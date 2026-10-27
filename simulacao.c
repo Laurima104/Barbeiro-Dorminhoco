@@ -3,9 +3,12 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <time.h>
+#include <errno.h>
 
 #define NUM_CADEIRAS 4   // Número de cadeiras na sala de espera
 #define NUM_CLIENTES 200  // Total de clientes simulados
+#define INTERVALO_PADRAO_MS 1000 // Intervalo padrão entre chegadas (ms)
 
 sem_t mutex;     // Exclusão mútua para acessar a variável 'esperando'
 sem_t clientes;  // Semáforo para contar clientes dormindo (acordar o barbeiro)
@@ -62,7 +65,24 @@ void* funcao_cliente(void* id_ptr) {
     return NULL;
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+    long intervalo_ms = INTERVALO_PADRAO_MS;
+
+    if (argc > 2) {
+        fprintf(stderr, "Uso: %s [intervalo_entre_clientes_ms]\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+    if (argc == 2) {
+        char *fim;
+        errno = 0;
+        intervalo_ms = strtol(argv[1], &fim, 10);
+        if (errno != 0 || *argv[1] == '\0' || *fim != '\0' || intervalo_ms < 0) {
+            fprintf(stderr, "Intervalo inválido. Informe um número inteiro de milissegundos maior ou igual a zero.\n");
+            fprintf(stderr, "Uso: %s [intervalo_entre_clientes_ms]\n", argv[0]);
+            return EXIT_FAILURE;
+        }
+    }
+
     pthread_t thread_barbeiro;
     pthread_t threads_clientes[NUM_CLIENTES];
 
@@ -74,12 +94,18 @@ int main() {
     // Cria a thread do barbeiro
     pthread_create(&thread_barbeiro, NULL, funcao_barbeiro, NULL);
 
-    // Cria as threads dos clientes em tempos diferentes
+    // Cria as threads dos clientes respeitando o intervalo configurado
     for (int i = 0; i < NUM_CLIENTES; i++) {
         int* id = malloc(sizeof(int));
         *id = i + 1;
         pthread_create(&threads_clientes[i], NULL, funcao_cliente, id);
-        sleep(1); // Intervalo de chegada entre os clientes
+        if (intervalo_ms > 0) {
+            struct timespec intervalo = {
+                .tv_sec = intervalo_ms / 1000,
+                .tv_nsec = (intervalo_ms % 1000) * 1000000L
+            };
+            nanosleep(&intervalo, NULL);
+        }
     }
 
     // Aguarda o término dos clientes (na simulação real fica rodando)
