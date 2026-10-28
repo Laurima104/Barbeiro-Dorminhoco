@@ -14,13 +14,13 @@ Sem argumentos, o programa pergunta o intervalo entre chegadas e a quantidade de
 ## Matriz experimental
 
 ```sh
-./executar_experimentos.sh ./barbeiro_dorminhoco resultados_experimentos.csv
-~/.venvs/matplotlib/bin/python gerar_graficos.py resultados_experimentos.csv
+./executar_experimentos.sh ./barbeiro_dorminhoco resultados_experimentos.csv eventos_experimentos.csv
+~/.venvs/matplotlib/bin/python gerar_graficos.py resultados_experimentos.csv eventos_experimentos.csv
 ```
 
 Neste ambiente, Python 3.13 e matplotlib estão instalados no ambiente local `~/.venvs/matplotlib` (sem alterar os pacotes do sistema).
 
-O script executa cinco repetições para cada uma das cinco configurações distintas, gerando um CSV e quatro PNGs. O desvio padrão entre repetições é mostrado como barra de erro.
+O script executa cinco repetições para cada uma das cinco configurações distintas, gerando CSVs de métricas e de eventos, além dos gráficos `g1.png` a `g4.png`. G1 compara cadeiras e vazão para intervalo de 2 ms; G2 compara intervalo e p95; G3 mostra cinco blocos de 40 chegadas com p95 e médias de aceitos/rejeitados por bloco; G4 mostra fila e estado ocupado/ocioso na repetição 1 da configuração de referência. As barras de erro mostram o desvio padrão entre repetições quando aplicável.
 
 ## Métricas e interpretação
 

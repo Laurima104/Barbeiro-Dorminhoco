@@ -11,6 +11,7 @@
 
 #define NUM_CLIENTES 200
 #define TEMPO_CORTE_MS 2.0
+#define MAX_EVENTOS (NUM_CLIENTES * 4)
 
 typedef enum { AGUARDANDO, ATENDIDO, REJEITADO } Estado;
 typedef struct {
@@ -35,6 +36,18 @@ static struct timespec inicio_total;
 static double atendimento_ms;
 static int atendidos, rejeitados;
 static atomic_int falhas;
+static int barbeiro_atendendo;
+typedef struct {
+    double tempo_ms;
+    int cliente_id;
+    size_t fila;
+    int ocupado;
+    char evento[20];
+} Evento;
+static Evento eventos[MAX_EVENTOS];
+static size_t total_eventos;
+static const char *nome_experimento, *nome_configuracao;
+static int numero_repeticao;
 
 static void erro_pthread(int codigo, const char *operacao) {
     if (codigo != 0) { fprintf(stderr, "%s: %s\n", operacao, strerror(codigo)); exit(EXIT_FAILURE); }
@@ -42,6 +55,19 @@ static void erro_pthread(int codigo, const char *operacao) {
 
 static double ms_entre(struct timespec a, struct timespec b) {
     return (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1000000.0;
+}
+
+/* Chamado com o mutex da simulação adquirido: salva um instantâneo do estado. */
+static void registrar_evento(const char *tipo, const Cliente *c) {
+    if (total_eventos >= MAX_EVENTOS) { atomic_store(&falhas, 1); return; }
+    struct timespec agora;
+    clock_gettime(CLOCK_MONOTONIC, &agora);
+    Evento *e = &eventos[total_eventos++];
+    e->tempo_ms = ms_entre(inicio_total, agora);
+    e->cliente_id = c ? c->id : 0;
+    e->fila = na_fila;
+    e->ocupado = barbeiro_atendendo;
+    snprintf(e->evento, sizeof e->evento, "%s", tipo);
 }
 
 /* nanosleep repetido preserva o prazo caso um sinal o interrompa. */
@@ -85,6 +111,8 @@ static void *funcao_barbeiro(void *arg) {
         c->inicio = (struct timespec){0};
         clock_gettime(CLOCK_MONOTONIC, &c->inicio);
         c->inicio_registrado = 1;
+        barbeiro_atendendo = 1;
+        registrar_evento("INICIO", c);
         erro_pthread(pthread_cond_signal(&c->mudou), "pthread_cond_signal");
         erro_pthread(pthread_mutex_unlock(&mutex), "pthread_mutex_unlock");
 
@@ -96,6 +124,7 @@ static void *funcao_barbeiro(void *arg) {
         c->estado = ATENDIDO;
         ++atendidos;
         atendimento_ms += ms_entre(c->inicio, c->fim);
+        barbeiro_atendendo = 0;
         if (na_fila > 0) {
             proximo = fila[cabeca];
             cabeca = (cabeca + 1) % NUM_CLIENTES;
@@ -103,6 +132,7 @@ static void *funcao_barbeiro(void *arg) {
         } else {
             barbeiro_ocupado = 0;
         }
+        registrar_evento("FIM", c);
         erro_pthread(pthread_cond_signal(&c->mudou), "pthread_cond_signal");
         erro_pthread(pthread_mutex_unlock(&mutex), "pthread_mutex_unlock");
     }
@@ -123,6 +153,7 @@ static void *funcao_cliente(void *arg) {
         proximo = c;
         clock_gettime(CLOCK_MONOTONIC, &c->entrada_fila);
         c->estado = AGUARDANDO;
+        registrar_evento("CHEGADA_ACEITA", c);
         erro_pthread(pthread_cond_signal(&trabalho), "pthread_cond_signal");
         while (!c->inicio_registrado)
             erro_pthread(pthread_cond_wait(&c->mudou, &mutex), "pthread_cond_wait");
@@ -134,6 +165,7 @@ static void *funcao_cliente(void *arg) {
         fila[cauda] = c;
         cauda = (cauda + 1) % NUM_CLIENTES;
         ++na_fila;
+        registrar_evento("CHEGADA_ACEITA", c);
         erro_pthread(pthread_cond_signal(&trabalho), "pthread_cond_signal");
         while (!c->inicio_registrado)
             erro_pthread(pthread_cond_wait(&c->mudou, &mutex), "pthread_cond_wait");
@@ -142,6 +174,7 @@ static void *funcao_cliente(void *arg) {
     } else {
         c->estado = REJEITADO;
         ++rejeitados;
+        registrar_evento("CHEGADA_REJEITADA", c);
     }
     erro_pthread(pthread_mutex_unlock(&mutex), "pthread_mutex_unlock");
     return NULL;
@@ -174,6 +207,23 @@ static int gravar_csv(const char *path, const char *exp, const char *config, int
     if (n_atendidos) fprintf(f, "%.9f,%.9f,%.9f,", media, p95, maximo); else fprintf(f, "N/A,N/A,N/A,");
     fprintf(f, "%.9f,%.9f\n", rejeicao_pct, utilizacao);
     if (fclose(f) != 0) { perror("fclose CSV"); return -1; }
+    return 0;
+}
+
+static int gravar_eventos(const char *path) {
+    if (!path || !*path) return 0;
+    FILE *f = fopen(path, "a+");
+    if (!f) { perror("fopen CSV de eventos"); return -1; }
+    if (fseek(f, 0, SEEK_END) != 0) { perror("fseek CSV de eventos"); fclose(f); return -1; }
+    if (ftell(f) == 0)
+        fprintf(f, "experimento,configuracao,repeticao,tempo_ms,cliente_id,event,fila,barbeiro_ocupado\n");
+    for (size_t i = 0; i < total_eventos; ++i) {
+        const Evento *e = &eventos[i];
+        fprintf(f, "%s,%s,%d,%.9f,%d,%s,%zu,%d\n", nome_experimento,
+                nome_configuracao, numero_repeticao, e->tempo_ms, e->cliente_id,
+                e->evento, e->fila, e->ocupado);
+    }
+    if (fclose(f) != 0) { perror("fclose CSV de eventos"); return -1; }
     return 0;
 }
 
@@ -215,6 +265,9 @@ int main(int argc, char **argv) {
     const char *exp = argc >= 5 ? argv[4] : "manual";
     const char *config = argc >= 6 ? argv[5] : "manual";
     int repeticao = argc >= 7 ? atoi(argv[6]) : 1;
+    nome_experimento = exp;
+    nome_configuracao = config;
+    numero_repeticao = repeticao;
     pthread_t barbeiro, threads[NUM_CLIENTES];
     size_t cond_inicializadas = 0;
     for (; cond_inicializadas < NUM_CLIENTES; ++cond_inicializadas) {
@@ -276,6 +329,7 @@ int main(int argc, char **argv) {
     int consistente = aceitos == atendidos && atendidos + rejeitados == NUM_CLIENTES && n_esperas == (size_t)atendidos && na_fila == 0 && registros_validos && !atomic_load(&falhas);
     printf("Consistência: %s (fila=%zu, thread do barbeiro encerrada)\n", consistente ? "OK" : "ERRO", na_fila);
     if (csv && gravar_csv(csv, exp, config, repeticao, intervalo, cadeiras, total, vazao, atendidos, rejeitados, media, p95, maximo, rejeicao_pct, utilizacao) != 0) consistente = 0;
+    if (gravar_eventos(getenv("TRACE_CSV")) != 0) consistente = 0;
     for (size_t i = 0; i < cond_inicializadas; ++i) erro_pthread(pthread_cond_destroy(&clientes[i].mudou), "pthread_cond_destroy");
     erro_pthread(pthread_cond_destroy(&trabalho), "pthread_cond_destroy");
     erro_pthread(pthread_cond_destroy(&inicio_simulacao), "pthread_cond_destroy");
