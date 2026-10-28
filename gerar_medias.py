@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Calcula a média das repetições agrupadas por configuração no CSV bruto."""
+"""Calcula médias por configuração sem ocultar repetições inválidas."""
 import csv
 import math
 import statistics
@@ -25,25 +25,39 @@ for linha in dados:
 if len(grupos) != 9 or any(len(linhas) != 5 for linhas in grupos.values()):
     raise SystemExit("Esperadas nove combinações, cada uma com exatamente cinco repetições.")
 
-colunas_media = [
-    campo for campo in campos
-    if campo not in chaves and campo != "repeticao"
-]
+colunas_media = [campo for campo in campos if campo not in chaves and campo != "repeticao"]
+campos_saida = chaves + ["repeticoes", "execucoes_validas"] + colunas_media
 with open(saida, "w", newline="", encoding="utf-8") as arquivo:
-    campos_saida = chaves + ["repeticoes"] + colunas_media
     escritor = csv.DictWriter(arquivo, fieldnames=campos_saida)
     escritor.writeheader()
     for chave in sorted(grupos):
         linhas = grupos[chave]
-        resultado = {"experimento": chave[0], "configuracao": chave[1], "repeticoes": len(linhas)}
+        validas = [linha for linha in linhas if linha.get("status") == "OK"]
+        resultado = {
+            "experimento": chave[0],
+            "configuracao": chave[1],
+            "repeticoes": len(linhas),
+            "execucoes_validas": len(validas),
+        }
         for campo in colunas_media:
+            if campo == "status":
+                resultado[campo] = "OK" if len(validas) == len(linhas) else "COM_FALHAS"
+                continue
+            base = linhas if campo == "timeout" else validas
+            valores_textuais = {linha.get(campo, "") for linha in base}
             amostras = []
-            for linha in linhas:
-                valor = linha[campo]
-                if valor not in ("", "N/A"):
-                    numero = float(valor)
-                    if math.isfinite(numero):
-                        amostras.append(numero)
-            resultado[campo] = f"{statistics.mean(amostras):.9f}" if amostras else "N/A"
+            for linha in base:
+                try:
+                    numero = float(linha.get(campo, ""))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(numero):
+                    amostras.append(numero)
+            if amostras:
+                resultado[campo] = f"{statistics.mean(amostras):.9f}"
+            elif len(valores_textuais) == 1:
+                resultado[campo] = next(iter(valores_textuais)) or "N/A"
+            else:
+                resultado[campo] = "N/A"
         escritor.writerow(resultado)
 print(f"Médias de {len(grupos)} combinações gravadas em {saida}")
