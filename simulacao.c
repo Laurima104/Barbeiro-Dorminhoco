@@ -58,12 +58,10 @@ static double ms_entre(struct timespec a, struct timespec b) {
 }
 
 /* Chamado com o mutex da simulação adquirido: salva um instantâneo do estado. */
-static void registrar_evento(const char *tipo, const Cliente *c) {
+static void registrar_evento(const char *tipo, const Cliente *c, struct timespec instante) {
     if (total_eventos >= MAX_EVENTOS) { atomic_store(&falhas, 1); return; }
-    struct timespec agora;
-    clock_gettime(CLOCK_MONOTONIC, &agora);
     Evento *e = &eventos[total_eventos++];
-    e->tempo_ms = ms_entre(inicio_total, agora);
+    e->tempo_ms = ms_entre(inicio_total, instante);
     e->cliente_id = c ? c->id : 0;
     e->fila = na_fila;
     e->ocupado = barbeiro_atendendo;
@@ -112,7 +110,7 @@ static void *funcao_barbeiro(void *arg) {
         clock_gettime(CLOCK_MONOTONIC, &c->inicio);
         c->inicio_registrado = 1;
         barbeiro_atendendo = 1;
-        registrar_evento("INICIO", c);
+        registrar_evento("INICIO", c, c->inicio);
         erro_pthread(pthread_cond_signal(&c->mudou), "pthread_cond_signal");
         erro_pthread(pthread_mutex_unlock(&mutex), "pthread_mutex_unlock");
 
@@ -132,7 +130,7 @@ static void *funcao_barbeiro(void *arg) {
         } else {
             barbeiro_ocupado = 0;
         }
-        registrar_evento("FIM", c);
+        registrar_evento("FIM", c, c->fim);
         erro_pthread(pthread_cond_signal(&c->mudou), "pthread_cond_signal");
         erro_pthread(pthread_mutex_unlock(&mutex), "pthread_mutex_unlock");
     }
@@ -153,7 +151,7 @@ static void *funcao_cliente(void *arg) {
         proximo = c;
         clock_gettime(CLOCK_MONOTONIC, &c->entrada_fila);
         c->estado = AGUARDANDO;
-        registrar_evento("CHEGADA_ACEITA", c);
+        registrar_evento("CHEGADA_ACEITA", c, c->entrada_fila);
         erro_pthread(pthread_cond_signal(&trabalho), "pthread_cond_signal");
         while (!c->inicio_registrado)
             erro_pthread(pthread_cond_wait(&c->mudou, &mutex), "pthread_cond_wait");
@@ -165,7 +163,7 @@ static void *funcao_cliente(void *arg) {
         fila[cauda] = c;
         cauda = (cauda + 1) % NUM_CLIENTES;
         ++na_fila;
-        registrar_evento("CHEGADA_ACEITA", c);
+        registrar_evento("CHEGADA_ACEITA", c, c->entrada_fila);
         erro_pthread(pthread_cond_signal(&trabalho), "pthread_cond_signal");
         while (!c->inicio_registrado)
             erro_pthread(pthread_cond_wait(&c->mudou, &mutex), "pthread_cond_wait");
@@ -174,7 +172,7 @@ static void *funcao_cliente(void *arg) {
     } else {
         c->estado = REJEITADO;
         ++rejeitados;
-        registrar_evento("CHEGADA_REJEITADA", c);
+        registrar_evento("CHEGADA_REJEITADA", c, c->chegada);
     }
     erro_pthread(pthread_mutex_unlock(&mutex), "pthread_mutex_unlock");
     return NULL;
